@@ -11,7 +11,10 @@ def send_vk_api_request(name, args, version='5.131'):
         resp = requests.get(req_url)
     except:
         return None
-    return resp.text if resp.status_code == 200 else None
+
+    if resp.status_code != 200:
+        return None
+    return json.loads(resp.text)['response'] 
 
 def send_tg_api_request(name, token, args):
     req_url = 'https://api.telegram.org/bot' + token + '/' + name + '?'
@@ -32,7 +35,8 @@ def send_tg_api_request(name, token, args):
     return resp_decoded['result'] if resp_decoded['ok'] else None
 
 def get_posts(token, owner_id='1', domain='apiclub', offset=0, count=1, flt='all'): 
-    return send_vk_api_request('wall.get', {'access_token' : token, 'owner_id' : '-' + owner_id, 'domain' : domain, 'offset' : offset, 'count' : count, 'filter' : flt})
+    resp = send_vk_api_request('wall.get', {'access_token' : token, 'owner_id' : '-' + owner_id, 'domain' : domain, 'offset' : offset, 'count' : count, 'filter' : flt})
+    return resp['items'] if resp else [] 
 
 def get_tg_updates(token, offset = None, limit = 100, timeout = 1, allowed_updates=None):
     args = { }
@@ -46,14 +50,49 @@ def get_tg_updates(token, offset = None, limit = 100, timeout = 1, allowed_updat
 def send_message(token, chat_id, text, parse_mode=None):
     return send_tg_api_request('sendMessage', token, { 'chat_id' : chat_id, 'text' : text, 'parse_mode' : parse_mode }) is not None 
 
-def process_update(upd):
-    print(upd)
+def is_command(s):
+    return s[0] == '/'
+
+def parse_command(s):
+    """
+        Parse command from text
+    Imput:
+        s : str
+    Output:
+        (command_name, args) : tuple
+        Where:
+        command_name : str
+        args : dict
+    """
+    splits = s.split()
+    return (splits[0][1:], splits[1:])
+
+
+def help_command(token, msg):
+    text = """
+        This is help command.
+    """
+    send_message(token, msg['chat']['id'], text)
+
+def get_command(token, msg, owner_id, domain, offset=0):
+    global vk_token
+    post = get_posts(vk_token, owner_id=owner_id, domain=domain, count=1, offset=offset)[0]
+    print(post['text'])
+    print(type(post['text']))
+    send_message(token, msg['chat']['id'], post['text'][1:])
 
 vk_token = os.getenv('VK_TOKEN')
 tg_token = os.getenv('TG_TOKEN')
 
-#print(get_posts(vk_token, owner_id='214737987', domain='phystech.confessions', count=1))
+if vk_token is None:
+    print('Missgin vk token')
+    exit(0)
 
+if tg_token is None:
+    print('Missgin tg token')
+    exit(0)
+
+commands = { 'help' : help_command, 'get' : get_command  }
 offset = None 
 
 while True:
@@ -64,8 +103,22 @@ while True:
     offset = updates[-1]['update_id'] + 1
 
     for update in updates: 
+        print('Got update')
         if 'message' in update and 'text' in update['message']: 
-            send_message(tg_token, update['message']['chat']['id'], update['message']['text'])
+            msg = update['message']
+            text = msg['text'].strip()
+            if not is_command(text):
+               continue 
+            
+            command_name, args = parse_command(text)
+            if command_name not in commands:
+                continue
 
-#print(get_tg_updates(tg_token))
+            try:
+                commands[command_name](tg_token, msg, *args)
+            except Exception as e:
+                print(f'Command "{command_name}" failed, args={args}')
+                print(e)
+
+#print(get_posts(vk_token, owner_id='214737987', domain='phystech.confessions', count=1))
 
