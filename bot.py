@@ -1,4 +1,5 @@
 import requests
+from urllib.parse import quote as encode_url
 import json
 import os
 
@@ -48,6 +49,7 @@ def get_tg_updates(token, offset = None, limit = 100, timeout = 1, allowed_updat
     return send_tg_api_request('getUpdates', token, { 'offset' : offset, 'limit' : limit, 'timeout' : timeout, 'allowed_updates' : allowed_updates }) 
 
 def send_message(token, chat_id, text, parse_mode=None):
+    text = encode_url(text)
     return send_tg_api_request('sendMessage', token, { 'chat_id' : chat_id, 'text' : text, 'parse_mode' : parse_mode }) is not None 
 
 def is_command(s):
@@ -77,9 +79,7 @@ def help_command(token, msg):
 def get_command(token, msg, owner_id, domain, offset=0):
     global vk_token
     post = get_posts(vk_token, owner_id=owner_id, domain=domain, count=1, offset=offset)[0]
-    print(post['text'])
-    print(type(post['text']))
-    send_message(token, msg['chat']['id'], post['text'][1:])
+    send_message(token, msg['chat']['id'], post['text'])
 
 vk_token = os.getenv('VK_TOKEN')
 tg_token = os.getenv('TG_TOKEN')
