@@ -10,7 +10,7 @@ def send_vk_api_request(name, args, version='5.131'):
     req_url += 'v=' + version
     try:
         resp = requests.get(req_url)
-    except:
+    except Exception:
         return None
 
     if resp.status_code != 200:
@@ -26,7 +26,7 @@ def send_tg_api_request(name, token, args):
     req_url = req_url[:-1]
     try:
         resp = requests.get(req_url)
-    except:
+    except Exception:
         return None
 
     if resp.status_code != 200:
@@ -95,30 +95,34 @@ if tg_token is None:
 commands = { 'help' : help_command, 'get' : get_command  }
 offset = None 
 
-while True:
-    updates = get_tg_updates(tg_token, offset)
-    if not updates: 
-        continue
+try:
+    while True:
+        updates = get_tg_updates(tg_token, offset)
+        if not updates: 
+            continue
 
-    offset = updates[-1]['update_id'] + 1
+        offset = updates[-1]['update_id'] + 1
 
-    for update in updates: 
-        print('Got update')
-        if 'message' in update and 'text' in update['message']: 
-            msg = update['message']
-            text = msg['text'].strip()
-            if not is_command(text):
-               continue 
-            
-            command_name, args = parse_command(text)
-            if command_name not in commands:
-                continue
+        for update in updates: 
+            print('Got update')
+            if 'message' in update and 'text' in update['message']: 
+                msg = update['message']
+                text = msg['text'].strip()
+                if not is_command(text):
+                   continue 
+                
+                command_name, args = parse_command(text)
+                if command_name not in commands:
+                    continue
 
-            try:
-                commands[command_name](tg_token, msg, *args)
-            except Exception as e:
-                print(f'Command "{command_name}" failed, args={args}')
-                print(e)
+                try:
+                    commands[command_name](tg_token, msg, *args)
+                except Exception as e:
+                    print(f'Command "{command_name}" failed, args={args}')
+                    print(e)
+except KeyboardInterrupt:
+    print("")
+    pass
 
 #print(get_posts(vk_token, owner_id='214737987', domain='phystech.confessions', count=1))
 
