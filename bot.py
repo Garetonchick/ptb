@@ -201,15 +201,21 @@ def fill_post_ids(start_date, vk_group_id, vk_group_domain):
 def transmit_posts(token, start_date, vk_group_id, vk_group_domain, tg_mirror_id):
     global vk_token, MAX_VK_POSTS_PER_REQUEST, start_transmitting_date
     ids = fill_post_ids(start_date, vk_group_id, vk_group_domain)
+    ids_len = len(ids)
 
     for i in range(0, len(ids), MAX_VK_POSTS_PER_REQUEST):  
         j = min(i + MAX_VK_POSTS_PER_REQUEST, len(ids)) 
-        posts = get_posts_by_ids(vk_token, ids) 
+        print(f"Loaded posts from {i + 1} to {j}")
+        posts = get_posts_by_ids(vk_token, ids[i:j]) 
+        post_idx = i
 
         for post in posts:
-            send_post(token, tg_mirror_id, post)
-            start_transmitting_date = datetime.fromtimestamp(post['date'])
-            commit_changes_to_db()
+            print(f"Transmission {post_idx}/{ids_len}")
+            post_idx += 1
+            if post:
+                send_post(token, tg_mirror_id, post)
+                start_transmitting_date = datetime.fromtimestamp(post['date'])
+                commit_changes_to_db()
             
 
 def datetime_to_dict(dt):
@@ -241,9 +247,9 @@ vk_token = os.getenv('VK_TOKEN')
 tg_token = os.getenv('TG_TOKEN')
 smpm_id = '171296758'
 smpm_domain = 'publicepsilon777'
-mirror_id = '-1001642319883'
+mirror_id = '-1001873032633' #'-1001642319883'
 db_path = 'db.json'
-start_transmitting_date = datetime(year=2022, month=9, day=1, hour=0, minute=0, second=0)
+start_transmitting_date = datetime(year=2023, month=5, day=1, hour=0, minute=0, second=0)
 
 
 if vk_token is None:
