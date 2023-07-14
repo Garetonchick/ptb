@@ -1,27 +1,47 @@
+import datetime
 import requests
-from urllib.parse import quote as encode_url
 import json
+import time
 import os
 
-def send_vk_api_request(name, args, version='5.131'):
+from urllib.parse import quote as encode_url
+
+def send_vk_api_request_impl(name, args, version):
     req_url = 'https://api.vk.com/method/' + name + '?'
     for arg_name, val in args.items():
-        req_url += '{}={}&'.format(arg_name, val)
+        req_url += '{}={}&'.format(arg_name, encode_url(str(val)))
     req_url += 'v=' + version
     try:
         resp = requests.get(req_url)
     except Exception:
         return None
 
-    if resp.status_code != 200:
-        return None
-    return json.loads(resp.text)['response'] 
+    return resp
 
-def send_tg_api_request(name, token, args):
+def send_vk_api_request(name, args, version='5.131'):
+    while True:
+        resp = send_vk_api_request_impl(name, args, version)
+
+        if resp is None:
+            return None
+
+        if resp.status_code == 200:
+            return json.loads(resp.text)['response']
+
+        if resp.status_code == 429:
+            print("Too many requests to vk api. Retrying...")
+            time.sleep(0.4) 
+        else:
+            print(f"Bad request to vk api. Response code {resp.status_code}")
+            break
+    return None
+    
+
+def send_tg_api_request_impl(name, token, args):
     req_url = 'https://api.telegram.org/bot' + token + '/' + name + '?'
     for arg_name, val in args.items():
         if val:
-            req_url += '{}={}&'.format(arg_name, val)
+            req_url += '{}={}&'.format(arg_name, encode_url(str(val)))
 
     req_url = req_url[:-1]
     try:
@@ -29,15 +49,35 @@ def send_tg_api_request(name, token, args):
     except Exception:
         return None
 
-    if resp.status_code != 200:
-        return None
+    return resp
 
-    resp_decoded = json.loads(resp.text)
-    return resp_decoded['result'] if resp_decoded['ok'] else None
+def send_tg_api_request(name, token, args):
+    while True:
+        resp = send_tg_api_request_impl(name, token, args)
+
+        if resp is None:
+            return None
+
+        if resp.status_code == 200:
+            return json.loads(resp.text)['result']
+
+        if resp.status_code == 429:
+            print("Too many requests to tg api. Retrying...")
+            time.sleep(0.4) 
+        else:
+            print(f"Bad request to tg api. Response code {resp.status_code}")
+            break
+    return None
+
 
 def get_posts(token, owner_id='1', domain='apiclub', offset=0, count=1, flt='all'): 
     resp = send_vk_api_request('wall.get', {'access_token' : token, 'owner_id' : '-' + owner_id, 'domain' : domain, 'offset' : offset, 'count' : count, 'filter' : flt})
     return resp['items'] if resp else [] 
+
+def get_posts_by_ids(token, ids): 
+    posts = ','.join(ids)
+    resp = send_vk_api_request('wall.getById', {'access_token' : token, 'posts' : posts})
+    return resp if resp else [] 
 
 def get_tg_updates(token, offset = None, limit = 100, timeout = 1, allowed_updates=None):
     args = { }
@@ -49,8 +89,50 @@ def get_tg_updates(token, offset = None, limit = 100, timeout = 1, allowed_updat
     return send_tg_api_request('getUpdates', token, { 'offset' : offset, 'limit' : limit, 'timeout' : timeout, 'allowed_updates' : allowed_updates }) 
 
 def send_message(token, chat_id, text, parse_mode=None):
-    text = encode_url(text)
     return send_tg_api_request('sendMessage', token, { 'chat_id' : chat_id, 'text' : text, 'parse_mode' : parse_mode }) is not None 
+
+def send_photo(token, chat_id, photo_url, caption=None, parse_mode=None):
+    return send_tg_api_request('sendPhoto', token, { 'chat_id' : chat_id, 'photo' : photo_url, 'caption' : caption, 'parse_mode' : parse_mode }) is not None 
+
+def send_post(token, chat_id, post):
+    photos = extract_photos(post)
+
+    if not photos:
+        send_message(token, chat_id, post['text'])
+        return
+
+    if len(photos) == 1:
+        send_photo(token, chat_id, photos[0], caption=post['text']) 
+        return 
+
+    print('Too many photos')
+
+def send_posts(token, chat_id, posts):
+    for post in posts:
+        send_post(token, chat_id, post)
+
+def extract_photo(photo_obj):
+    bstw = 0 
+    bsth = 0 
+    bst_url = ""
+    for scaled_photo in photo_obj['sizes']:
+        w = scaled_photo['width']
+        h = scaled_photo['height']
+        if w > bstw or h > bsth: 
+            w = bstw
+            h = bsth
+            bst_url = scaled_photo['url']
+    return bst_url 
+
+def extract_photos(post):
+    photos = []
+    for attachment in post['attachments']:
+        if attachment['type'] == "photo":
+            photos.append(extract_photo(attachment['photo']))
+    return photos
+
+def extract_id(post):
+    return '{}_{}'.format(post['owner_id'], post['id'])
 
 def is_command(s):
     return s[0] == '/'
@@ -79,10 +161,47 @@ def help_command(token, msg):
 def get_command(token, msg, owner_id, domain, offset=0):
     global vk_token
     post = get_posts(vk_token, owner_id=owner_id, domain=domain, count=1, offset=offset)[0]
-    send_message(token, msg['chat']['id'], post['text'])
+    send_post(token, msg['chat']['id'], post)
 
+def fill_post_ids(start_date, vk_group_id, vk_group_domain):
+    global vk_token, MAX_VK_POSTS_PER_REQUEST
+    ids = []
+    bucket_size = 1
+    offset = 1
+
+    while True:
+        bucket = get_posts(vk_token, owner_id=vk_group_id, domain=vk_group_domain, count=bucket_size, offset=offset) 
+        bucket_ids = list(map(extract_id, bucket))
+        ids += bucket_ids
+        # TODO: Fix post clonning
+        offset += bucket_size
+        bucket_size = min(MAX_VK_POSTS_PER_REQUEST, bucket_size * 2)
+
+        if datetime.datetime.fromtimestamp(bucket[-1]['date']) < start_date:
+            break
+
+    ids.reverse()
+    return ids
+
+
+def transmit_posts(token, start_date, vk_group_id, vk_group_domain, tg_mirror_id):
+    global vk_token, MAX_VK_POSTS_PER_REQUEST
+    ids = fill_post_ids(start_date, vk_group_id, vk_group_domain)
+
+    for i in range(0, len(ids), MAX_VK_POSTS_PER_REQUEST):  
+        j = min(i + MAX_VK_POSTS_PER_REQUEST, len(ids)) 
+        posts = get_posts_by_ids(vk_token, ids) 
+        send_posts(token, tg_mirror_id, posts)
+
+
+MAX_VK_POSTS_PER_REQUEST = 100
 vk_token = os.getenv('VK_TOKEN')
 tg_token = os.getenv('TG_TOKEN')
+db_path = 'db.json'
+smpm_id = '171296758'
+smpm_domain = 'publicepsilon777'
+mirror_id = '-1001642319883'
+start_transmitting_date = datetime.datetime(year=2023, month=7, day=10, hour=10, minute=14, second=31)
 
 if vk_token is None:
     print('Missgin vk token')
@@ -92,8 +211,10 @@ if tg_token is None:
     print('Missgin tg token')
     exit(0)
 
-commands = { 'help' : help_command, 'get' : get_command  }
+commands = { 'help' : help_command, 'get' : get_command }
 offset = None 
+
+transmit_posts(tg_token, start_transmitting_date, smpm_id, smpm_domain, mirror_id)
 
 try:
     while True:
@@ -105,6 +226,7 @@ try:
 
         for update in updates: 
             print('Got update')
+            print(update)
             if 'message' in update and 'text' in update['message']: 
                 msg = update['message']
                 text = msg['text'].strip()
