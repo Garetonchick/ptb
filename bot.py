@@ -76,9 +76,18 @@ def get_posts(token, owner_id='1', domain='apiclub', offset=0, count=1, flt='all
     return resp['items'] if resp else [] 
 
 def get_posts_by_ids(token, ids): 
-    posts = ','.join(ids)
-    resp = send_vk_api_request('wall.getById', {'access_token' : token, 'posts' : posts})
-    return resp if resp else [] 
+    global MAX_VK_POSTS_PER_REQUEST
+    posts = [] 
+
+    for i in range(0, len(ids), MAX_VK_POSTS_PER_REQUEST):
+        bucket_size = min(len(ids) - i, MAX_VK_POSTS_PER_REQUEST)
+        ids_for_url = ','.join(ids[i:i+bucket_size])
+        resp = send_vk_api_request('wall.getById', {'access_token' : token, 'posts' : ids_for_url})
+        
+        if resp:
+            posts += resp
+
+    return posts 
 
 def get_tg_updates(token, offset = None, limit = 100, timeout = 1, allowed_updates=None):
     return send_tg_api_request('getUpdates', token, { 'offset' : offset, 'limit' : limit, 'timeout' : timeout, 'allowed_updates' : allowed_updates }) 
@@ -234,7 +243,7 @@ smpm_id = '171296758'
 smpm_domain = 'publicepsilon777'
 mirror_id = '-1001642319883'
 db_path = 'db.json'
-start_transmitting_date = datetime(year=2023, month=7, day=10, hour=10, minute=14, second=31)
+start_transmitting_date = datetime(year=2022, month=9, day=1, hour=0, minute=0, second=0)
 
 
 if vk_token is None:
