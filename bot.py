@@ -5,6 +5,7 @@ import time
 import os
 
 from urllib.parse import quote as encode_url
+from datetime import datetime
 
 def send_vk_api_request_impl(name, args, version):
     req_url = 'https://api.vk.com/method/' + name + '?'
@@ -80,12 +81,6 @@ def get_posts_by_ids(token, ids):
     return resp if resp else [] 
 
 def get_tg_updates(token, offset = None, limit = 100, timeout = 1, allowed_updates=None):
-    args = { }
-    if offset:
-        args['offset'] = offset
-    if allowed_updates:
-        args['allowed_updates'] = allowed_updates
-
     return send_tg_api_request('getUpdates', token, { 'offset' : offset, 'limit' : limit, 'timeout' : timeout, 'allowed_updates' : allowed_updates }) 
 
 def send_message(token, chat_id, text, parse_mode=None):
@@ -171,37 +166,76 @@ def fill_post_ids(start_date, vk_group_id, vk_group_domain):
 
     while True:
         bucket = get_posts(vk_token, owner_id=vk_group_id, domain=vk_group_domain, count=bucket_size, offset=offset) 
-        bucket_ids = list(map(extract_id, bucket))
-        ids += bucket_ids
-        # TODO: Fix post clonning
-        offset += bucket_size
-        bucket_size = min(MAX_VK_POSTS_PER_REQUEST, bucket_size * 2)
-
-        if datetime.datetime.fromtimestamp(bucket[-1]['date']) < start_date:
+        if bucket is None:
             break
+
+        bucket_ids = list(map(extract_id, bucket))
+
+        if datetime.fromtimestamp(bucket[-1]['date']) <= start_date:
+            bad_idx = next(filter(lambda x: datetime.fromtimestamp(x[1]['date']) <= start_date, enumerate(bucket)))[0]
+            ids += bucket_ids[:bad_idx]
+            offset += bad_idx
+            break
+
+        if ids and ids[-1] in bucket_ids:
+            skip = bucket_ids.index(ids[-1]) + 1
+            ids += bucket_ids[skip:]
+        else:
+            ids += bucket_ids
+        offset += len(bucket) 
+        bucket_size = min(MAX_VK_POSTS_PER_REQUEST, bucket_size * 2)
 
     ids.reverse()
     return ids
 
 
 def transmit_posts(token, start_date, vk_group_id, vk_group_domain, tg_mirror_id):
-    global vk_token, MAX_VK_POSTS_PER_REQUEST
+    global vk_token, MAX_VK_POSTS_PER_REQUEST, start_transmitting_date
     ids = fill_post_ids(start_date, vk_group_id, vk_group_domain)
 
     for i in range(0, len(ids), MAX_VK_POSTS_PER_REQUEST):  
         j = min(i + MAX_VK_POSTS_PER_REQUEST, len(ids)) 
         posts = get_posts_by_ids(vk_token, ids) 
-        send_posts(token, tg_mirror_id, posts)
 
+        for post in posts:
+            send_post(token, tg_mirror_id, post)
+            start_transmitting_date = datetime.fromtimestamp(post['date'])
+            commit_changes_to_db()
+            
+
+def datetime_to_dict(dt):
+    return { 'year' : dt.year, 'month' : dt.month, 'day' : dt.day, 'hour' : dt.hour, 'minute' : dt.minute, 'second' : dt.second }
+
+def dict_to_datetime(d):
+    return datetime(year=d['year'], month=d['month'], day=d['day'], hour=d['hour'], minute=d['minute'], second=d['second']) 
+
+def commit_changes_to_db():
+    global db_path, start_transmitting_date
+    with open(db_path, 'w') as db:
+        json.dump(datetime_to_dict(start_transmitting_date), db)
+
+def load_from_db():
+    global db_path, start_transmitting_date
+    db = None
+    try:
+        db = open(db_path, 'r')
+        start_transmitting_date = dict_to_datetime(json.load(db))
+    except Exception as e:
+        print("Falling back to default start_transmitting_date")
+        print(e)
+    finally:
+        if db is not None:
+            db.close()
 
 MAX_VK_POSTS_PER_REQUEST = 100
 vk_token = os.getenv('VK_TOKEN')
 tg_token = os.getenv('TG_TOKEN')
-db_path = 'db.json'
 smpm_id = '171296758'
 smpm_domain = 'publicepsilon777'
 mirror_id = '-1001642319883'
-start_transmitting_date = datetime.datetime(year=2023, month=7, day=10, hour=10, minute=14, second=31)
+db_path = 'db.json'
+start_transmitting_date = datetime(year=2023, month=7, day=10, hour=10, minute=14, second=31)
+
 
 if vk_token is None:
     print('Missgin vk token')
@@ -214,10 +248,12 @@ if tg_token is None:
 commands = { 'help' : help_command, 'get' : get_command }
 offset = None 
 
-transmit_posts(tg_token, start_transmitting_date, smpm_id, smpm_domain, mirror_id)
 
 try:
+    load_from_db();
+
     while True:
+        transmit_posts(tg_token, start_transmitting_date, smpm_id, smpm_domain, mirror_id)
         updates = get_tg_updates(tg_token, offset)
         if not updates: 
             continue
@@ -246,5 +282,4 @@ except KeyboardInterrupt:
     print("")
     pass
 
-#print(get_posts(vk_token, owner_id='214737987', domain='phystech.confessions', count=1))
-
+# TODO: support multiple photos, gifs, video
