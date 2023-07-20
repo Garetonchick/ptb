@@ -98,8 +98,42 @@ def send_message(token, chat_id, text, parse_mode=None):
 def send_photo(token, chat_id, photo_url, caption=None, parse_mode=None):
     return send_tg_api_request('sendPhoto', token, { 'chat_id' : chat_id, 'photo' : photo_url, 'caption' : caption, 'parse_mode' : parse_mode }) is not None 
 
+def send_animation(token, chat_id, animation_url, caption=None, parse_mode=None):
+    return send_tg_api_request('sendAnimation', token, { 'chat_id' : chat_id, 'animation' : animation_url, 'caption' : caption, 'parse_mode' : parse_mode }) is not None 
+
+def send_media_group(token, chat_id, media):
+    return send_tg_api_request('sendMediaGroup', token, { 'chat_id' : chat_id, 'media' : json.dumps(media)}) is not None 
+
+def remove_nans(d):
+    return { k: v for k, v, in d.items() if v is not None }
+
+def create_input_media_photo(photo_url, caption=None, parse_mode=None):
+    return remove_nans({'type' : 'photo', 'media' : photo_url, 'caption' : caption, 'parse_mode' : parse_mode})
+
+def send_multiphoto(token, chat_id, photos, caption=None, parse_mode=None):
+    for i, url in enumerate(photos):
+        if i == 0:
+            photos[i] = create_input_media_photo(url, caption, parse_mode)
+        else:
+            photos[i] = create_input_media_photo(url)
+    return send_media_group(token, chat_id, photos) 
+
 def send_post(token, chat_id, post):
     photos = extract_photos(post)
+    gifs = extract_gifs(post)
+    print(post)
+
+    if photos and gifs:
+        print("Too much media in one post")
+        return
+    
+    if gifs:
+        print('Has gifs!!!!')
+        send_animation(token, chat_id, gifs[0], caption=post['text'])
+        return
+
+    if not photos and not ('text' in post):
+        return
 
     if not photos:
         send_message(token, chat_id, post['text'])
@@ -109,7 +143,7 @@ def send_post(token, chat_id, post):
         send_photo(token, chat_id, photos[0], caption=post['text']) 
         return 
 
-    print('Too many photos')
+    send_multiphoto(token, chat_id, photos, caption=post['text'])
 
 def send_posts(token, chat_id, posts):
     for post in posts:
@@ -134,6 +168,14 @@ def extract_photos(post):
         if attachment['type'] == "photo":
             photos.append(extract_photo(attachment['photo']))
     return photos
+
+def extract_gifs(post):
+    gifs = []
+    for attachment in post['attachments']:
+        if attachment['type'] == 'doc' and attachment['doc']['ext'] == 'gif':
+            gifs.append(attachment['doc']['url'])
+    return gifs
+
 
 def extract_id(post):
     return '{}_{}'.format(post['owner_id'], post['id'])
@@ -268,7 +310,7 @@ try:
     load_from_db();
 
     while True:
-        transmit_posts(tg_token, start_transmitting_date, smpm_id, smpm_domain, mirror_id)
+        #transmit_posts(tg_token, start_transmitting_date, smpm_id, smpm_domain, mirror_id)
         updates = get_tg_updates(tg_token, offset)
         if not updates: 
             continue
