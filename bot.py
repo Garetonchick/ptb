@@ -1,122 +1,19 @@
+import vk
+import tg
+
+import argparse
 import datetime
-import requests
 import json
-import time
 import os
 
-from urllib.parse import quote as encode_url
 from datetime import datetime
 
-def send_vk_api_request_impl(name, args, version):
-    req_url = 'https://api.vk.com/method/' + name + '?'
-    for arg_name, val in args.items():
-        req_url += '{}={}&'.format(arg_name, encode_url(str(val)))
-    req_url += 'v=' + version
-    try:
-        resp = requests.get(req_url)
-    except Exception:
-        return None
-
-    return resp
-
-def send_vk_api_request(name, args, version='5.131'):
-    while True:
-        resp = send_vk_api_request_impl(name, args, version)
-
-        if resp is None:
-            return None
-
-        if resp.status_code == 200:
-            return json.loads(resp.text)['response']
-
-        if resp.status_code == 429:
-            print("Too many requests to vk api. Retrying...")
-            time.sleep(0.4) 
-        else:
-            print(f"Bad request to vk api. Response code {resp.status_code}")
-            break
-    return None
-    
-
-def send_tg_api_request_impl(name, token, args):
-    req_url = 'https://api.telegram.org/bot' + token + '/' + name + '?'
-    for arg_name, val in args.items():
-        if val:
-            req_url += '{}={}&'.format(arg_name, encode_url(str(val)))
-
-    req_url = req_url[:-1]
-    try:
-        resp = requests.get(req_url)
-    except Exception:
-        return None
-
-    return resp
-
-def send_tg_api_request(name, token, args):
-    while True:
-        resp = send_tg_api_request_impl(name, token, args)
-
-        if resp is None:
-            return None
-
-        if resp.status_code == 200:
-            return json.loads(resp.text)['result']
-
-        if resp.status_code == 429:
-            print("Too many requests to tg api. Retrying...")
-            time.sleep(0.4) 
-        else:
-            print(f"Bad request to tg api. Response code {resp.status_code}")
-            break
-    return None
-
-
-def get_posts(token, owner_id='1', domain='apiclub', offset=0, count=1, flt='all'): 
-    resp = send_vk_api_request('wall.get', {'access_token' : token, 'owner_id' : '-' + owner_id, 'domain' : domain, 'offset' : offset, 'count' : count, 'filter' : flt})
-    return resp['items'] if resp else [] 
-
-def get_posts_by_ids(token, ids): 
-    global MAX_VK_POSTS_PER_REQUEST
-    posts = [] 
-
-    for i in range(0, len(ids), MAX_VK_POSTS_PER_REQUEST):
-        bucket_size = min(len(ids) - i, MAX_VK_POSTS_PER_REQUEST)
-        ids_for_url = ','.join(ids[i:i+bucket_size])
-        resp = send_vk_api_request('wall.getById', {'access_token' : token, 'posts' : ids_for_url})
-        
-        if resp:
-            posts += resp
-
-    return posts 
-
-def get_tg_updates(token, offset = None, limit = 100, timeout = 1, allowed_updates=None):
-    return send_tg_api_request('getUpdates', token, { 'offset' : offset, 'limit' : limit, 'timeout' : timeout, 'allowed_updates' : allowed_updates }) 
-
-def send_message(token, chat_id, text, parse_mode=None):
-    return send_tg_api_request('sendMessage', token, { 'chat_id' : chat_id, 'text' : text, 'parse_mode' : parse_mode }) is not None 
-
-def send_photo(token, chat_id, photo_url, caption=None, parse_mode=None):
-    return send_tg_api_request('sendPhoto', token, { 'chat_id' : chat_id, 'photo' : photo_url, 'caption' : caption, 'parse_mode' : parse_mode }) is not None 
-
-def send_animation(token, chat_id, animation_url, caption=None, parse_mode=None):
-    return send_tg_api_request('sendAnimation', token, { 'chat_id' : chat_id, 'animation' : animation_url, 'caption' : caption, 'parse_mode' : parse_mode }) is not None 
-
-def send_media_group(token, chat_id, media):
-    return send_tg_api_request('sendMediaGroup', token, { 'chat_id' : chat_id, 'media' : json.dumps(media)}) is not None 
-
-def remove_nans(d):
-    return { k: v for k, v, in d.items() if v is not None }
-
-def create_input_media_photo(photo_url, caption=None, parse_mode=None):
-    return remove_nans({'type' : 'photo', 'media' : photo_url, 'caption' : caption, 'parse_mode' : parse_mode})
-
-def send_multiphoto(token, chat_id, photos, caption=None, parse_mode=None):
-    for i, url in enumerate(photos):
-        if i == 0:
-            photos[i] = create_input_media_photo(url, caption, parse_mode)
-        else:
-            photos[i] = create_input_media_photo(url)
-    return send_media_group(token, chat_id, photos) 
+# Globals TODO: Remove
+smpm_id = '171296758'
+smpm_domain = 'publicepsilon777'
+db_path = os.getenv('DB_PATH', 'db.json')
+start_transmitting_date = datetime(year=2023, month=5, day=1, 
+                                   hour=0, minute=0, second=0)
 
 def send_post(token, chat_id, post):
     photos = extract_photos(post)
@@ -129,25 +26,21 @@ def send_post(token, chat_id, post):
     
     if gifs:
         print('Has gifs!!!!')
-        send_animation(token, chat_id, gifs[0], caption=post['text'])
+        tg.send_animation(token, chat_id, gifs[0], caption=post['text'])
         return
 
     if not photos and not ('text' in post):
         return
 
     if not photos:
-        send_message(token, chat_id, post['text'])
+        tg.send_message(token, chat_id, post['text'])
         return
 
     if len(photos) == 1:
-        send_photo(token, chat_id, photos[0], caption=post['text']) 
+        tg.send_photo(token, chat_id, photos[0], caption=post['text']) 
         return 
 
-    send_multiphoto(token, chat_id, photos, caption=post['text'])
-
-def send_posts(token, chat_id, posts):
-    for post in posts:
-        send_post(token, chat_id, post)
+    tg.send_multiphoto(token, chat_id, photos, caption=post['text'])
 
 def extract_photo(photo_obj):
     bstw = 0 
@@ -176,10 +69,6 @@ def extract_gifs(post):
             gifs.append(attachment['doc']['url'])
     return gifs
 
-
-def extract_id(post):
-    return '{}_{}'.format(post['owner_id'], post['id'])
-
 def is_command(s):
     return s[0] == '/'
 
@@ -198,67 +87,35 @@ def parse_command(s):
     return (splits[0][1:], splits[1:])
 
 
-def help_command(token, msg):
+def help_command(vk_token, tg_token, msg):
     text = """
         This is help command.
     """
-    send_message(token, msg['chat']['id'], text)
+    tg.send_message(tg_token, msg['chat']['id'], text)
 
-def get_command(token, msg, owner_id, domain, offset=0):
-    global vk_token
-    post = get_posts(vk_token, owner_id=owner_id, domain=domain, count=1, offset=offset)[0]
-    send_post(token, msg['chat']['id'], post)
+def get_command(vk_token, tg_token, msg, owner_id, domain, offset=0):
+    post = vk.get_posts(vk_token, owner_id=owner_id, domain=domain, 
+                        count=1, offset=offset)[0]
+    send_post(tg_token, msg['chat']['id'], post)
 
-def fill_post_ids(start_date, vk_group_id, vk_group_domain):
-    global vk_token, MAX_VK_POSTS_PER_REQUEST
-    ids = []
-    bucket_size = 1
-    offset = 1
-
-    while True:
-        bucket = get_posts(vk_token, owner_id=vk_group_id, domain=vk_group_domain, count=bucket_size, offset=offset) 
-        if bucket is None:
-            break
-
-        bucket_ids = list(map(extract_id, bucket))
-
-        if datetime.fromtimestamp(bucket[-1]['date']) <= start_date:
-            bad_idx = next(filter(lambda x: datetime.fromtimestamp(x[1]['date']) <= start_date, enumerate(bucket)))[0]
-            ids += bucket_ids[:bad_idx]
-            offset += bad_idx
-            break
-
-        if ids and ids[-1] in bucket_ids:
-            skip = bucket_ids.index(ids[-1]) + 1
-            ids += bucket_ids[skip:]
-        else:
-            ids += bucket_ids
-        offset += len(bucket) 
-        bucket_size = min(MAX_VK_POSTS_PER_REQUEST, bucket_size * 2)
-
-    ids.reverse()
-    return ids
-
-
-def transmit_posts(token, start_date, vk_group_id, vk_group_domain, tg_mirror_id):
-    global vk_token, MAX_VK_POSTS_PER_REQUEST, start_transmitting_date
-    ids = fill_post_ids(start_date, vk_group_id, vk_group_domain)
+def transmit_posts(vk_token, tg_token, start_date, vk_group_id, vk_group_domain, tg_mirror_id):
+    global start_transmitting_date
+    ids = vk.fill_post_ids(vk_token, start_date, vk_group_id, vk_group_domain)
     ids_len = len(ids)
 
-    for i in range(0, len(ids), MAX_VK_POSTS_PER_REQUEST):  
-        j = min(i + MAX_VK_POSTS_PER_REQUEST, len(ids)) 
+    for i in range(0, len(ids), vk.MAX_VK_POSTS_PER_REQUEST):  
+        j = min(i + vk.MAX_VK_POSTS_PER_REQUEST, len(ids)) 
+        posts = vk.get_posts_by_ids(vk_token, ids[i:j]) 
         print(f"Loaded posts from {i + 1} to {j}")
-        posts = get_posts_by_ids(vk_token, ids[i:j]) 
         post_idx = i
 
         for post in posts:
             print(f"Transmission {post_idx}/{ids_len}")
             post_idx += 1
             if post:
-                send_post(token, tg_mirror_id, post)
+                send_post(tg_token, tg_mirror_id, post)
                 start_transmitting_date = datetime.fromtimestamp(post['date'])
                 commit_changes_to_db()
-            
 
 def datetime_to_dict(dt):
     return { 'year' : dt.year, 'month' : dt.month, 'day' : dt.day, 'hour' : dt.hour, 'minute' : dt.minute, 'second' : dt.second }
@@ -284,59 +141,66 @@ def load_from_db():
         if db is not None:
             db.close()
 
-MAX_VK_POSTS_PER_REQUEST = 100
-vk_token = os.getenv('VK_TOKEN')
-tg_token = os.getenv('TG_TOKEN')
-smpm_id = '171296758'
-smpm_domain = 'publicepsilon777'
-mirror_id = '-1001873032633' #'-1001642319883'
-db_path = 'db.json'
-start_transmitting_date = datetime(year=2023, month=5, day=1, hour=0, minute=0, second=0)
+def try_exec_text_msg(msg, vk_token, tg_token):
+    commands = { 'help' : help_command, 'get' : get_command }
+    text = msg['text'].strip()
+    if not is_command(text):
+        return 
+    
+    command_name, args = parse_command(text)
+    if command_name not in commands:
+        return
+    try:
+        commands[command_name](vk_token, tg_token, msg, *args)
+    except Exception as e:
+        print(f'Command "{command_name}" failed, args={args}')
+        print(f'Thrown exception:\n{e}')
 
+def process_updates(updates, vk_token, tg_token):
+    for update in updates: 
+        if 'message' in update and 'text' in update['message']: 
+            try_exec_text_msg(update['message'], vk_token, tg_token)
 
-if vk_token is None:
-    print('Missgin vk token')
-    exit(0)
+def setup_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("-m", "--mirror", help="enable mirror", action="store_true")
+    return parser.parse_args()
 
-if tg_token is None:
-    print('Missgin tg token')
-    exit(0)
+def main():
+    args = setup_args()
+    global start_transmitting_date, smpm_id, smpm_domain
+    vk_token = os.getenv('VK_TOKEN')
+    tg_token = os.getenv('TG_TOKEN')
+    mirror_id = os.getenv('MIRROR_ID')
+    if vk_token is None:
+        print('Missing vk token in env')
+        exit(0)
+    if tg_token is None:
+        print('Missing tg token in env')
+        exit(0)
+    if args.mirror and not mirror_id:  
+        print('Missing mirror id in env')
+        exit(0)
 
-commands = { 'help' : help_command, 'get' : get_command }
-offset = None 
+    offset = None 
 
-
-try:
     load_from_db();
 
     while True:
-        #transmit_posts(tg_token, start_transmitting_date, smpm_id, smpm_domain, mirror_id)
-        updates = get_tg_updates(tg_token, offset)
-        if not updates: 
-            continue
+        if args.mirror:
+            transmit_posts(vk_token, tg_token, 
+                           start_transmitting_date, smpm_id, smpm_domain, mirror_id)
 
-        offset = updates[-1]['update_id'] + 1
+        updates = tg.get_tg_updates(tg_token, offset)
+        if updates:
+            offset = updates[-1]['update_id'] + 1
+            process_updates(updates, vk_token, tg_token)
 
-        for update in updates: 
-            print('Got update')
-            print(update)
-            if 'message' in update and 'text' in update['message']: 
-                msg = update['message']
-                text = msg['text'].strip()
-                if not is_command(text):
-                   continue 
-                
-                command_name, args = parse_command(text)
-                if command_name not in commands:
-                    continue
-
-                try:
-                    commands[command_name](tg_token, msg, *args)
-                except Exception as e:
-                    print(f'Command "{command_name}" failed, args={args}')
-                    print(e)
-except KeyboardInterrupt:
-    print("")
-    pass
+if __name__ == "__main__":
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("")
+        exit(0)
 
 # TODO: support multiple photos, gifs, video
