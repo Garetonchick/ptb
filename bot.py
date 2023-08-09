@@ -7,6 +7,7 @@ import json
 import os
 
 from datetime import datetime
+from dotenv import load_dotenv
 
 # Globals TODO: Remove
 smpm_id = '171296758'
@@ -164,11 +165,18 @@ def process_updates(updates, vk_token, tg_token):
 def setup_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("-m", "--mirror", help="enable mirror", action="store_true")
+    parser.add_argument("-l", "--load", metavar='FILE.env',
+                        help="load settings from FILE.env")
     return parser.parse_args()
 
 def main():
     args = setup_args()
+
+    if args.load:
+        load_dotenv(args.load) 
+
     global start_transmitting_date, smpm_id, smpm_domain
+
     vk_token = os.getenv('VK_TOKEN')
     tg_token = os.getenv('TG_TOKEN')
     mirror_id = os.getenv('MIRROR_ID')
