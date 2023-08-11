@@ -2,6 +2,7 @@ from sqlalchemy import String, DateTime
 from sqlalchemy import create_engine
 from sqlalchemy.orm import DeclarativeBase
 from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.engine import URL
 
 class Base(DeclarativeBase):
     pass    
@@ -26,5 +27,18 @@ class Mirror(Base):
             )
         """
 
-engine = create_engine("sqlite+pysqlite:///:memory:", echo=True)
-Base.metadata.create_all(engine)
+engine = None
+
+def init(username, host, database, password, port='5432'):
+    global engine
+    url = URL.create(
+        drivername="postgresql",
+        username=username,
+        host=host,
+        database=database,
+        password=password,
+        port=port
+    )
+
+    engine = create_engine(url, echo=True)
+    Base.metadata.create_all(engine)

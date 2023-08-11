@@ -1,4 +1,8 @@
 VK_TOKEN=""
 TG_TOKEN=""
-MIRROR_ID=""
-DB_PATH=""
+DB_USER=""
+DB_DB=""
+DB_HOST=""
+DB_PASSWORD=""
+DB_PORT="" # Optional, default: "6644"
+

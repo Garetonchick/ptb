@@ -13,11 +13,6 @@ from collections import namedtuple
 from dotenv import load_dotenv
 
 # Globals TODO: Remove
-smpm_id = '171296758'
-smpm_domain = 'publicepsilon777'
-db_path = os.getenv('DB_PATH', 'db.json')
-start_transmitting_date = datetime(year=2023, month=5, day=1, 
-                                   hour=0, minute=0, second=0)
 mirrors = []
 
 def send_post(token, chat_id, post):
@@ -193,30 +188,6 @@ def send_posts_to_mirrors(vk_token, tg_token):
             sus_mirror.start_datetime = new_start_datetime
             sus.commit()
 
-def datetime_to_dict(dt):
-    return { 'year' : dt.year, 'month' : dt.month, 'day' : dt.day, 'hour' : dt.hour, 'minute' : dt.minute, 'second' : dt.second }
-
-def dict_to_datetime(d):
-    return datetime(year=d['year'], month=d['month'], day=d['day'], hour=d['hour'], minute=d['minute'], second=d['second']) 
-
-def commit_changes_to_db():
-    global db_path, start_transmitting_date
-    with open(db_path, 'w') as db:
-        json.dump(datetime_to_dict(start_transmitting_date), db)
-
-def load_from_db():
-    global db_path, start_transmitting_date
-    db = None
-    try:
-        db = open(db_path, 'r')
-        start_transmitting_date = dict_to_datetime(json.load(db))
-    except Exception as e:
-        print("Falling back to default start_transmitting_date")
-        print(e)
-    finally:
-        if db is not None:
-            db.close()
-
 def refresh_mirrors_list():
     global mirrors
 
@@ -268,31 +239,25 @@ def main():
     if args.load:
         load_dotenv(args.load) 
 
-    global start_transmitting_date, smpm_id, smpm_domain
+    models.init(os.getenv('DB_USER'), os.getenv('DB_HOST'), 
+                os.getenv('DB_DB'), os.getenv('DB_PASSWORD'),
+                os.getenv('DB_PORT', '6644'))
 
     vk_token = os.getenv('VK_TOKEN')
     tg_token = os.getenv('TG_TOKEN')
-    mirror_id = os.getenv('MIRROR_ID')
     if vk_token is None:
         print('Missing vk token in env')
         exit(0)
     if tg_token is None:
         print('Missing tg token in env')
         exit(0)
-    if args.mirror and not mirror_id:  
-        print('Missing mirror id in env')
-        exit(0)
 
     offset = None 
-
-    load_from_db();
 
     while True:
         if args.mirror:
             refresh_mirrors_list()
             send_posts_to_mirrors(vk_token, tg_token)
-            # transmit_posts(vk_token, tg_token, 
-            #                start_transmitting_date, smpm_id, smpm_domain, mirror_id)
 
         updates = tg.get_tg_updates(tg_token, offset)
         if updates:
@@ -307,3 +272,4 @@ if __name__ == "__main__":
         exit(0)
 
 # TODO: support multiple photos, gifs, video
+
