@@ -27,7 +27,7 @@ def send_vk_api_request(name, args, version='5.131'):
             return None
 
         if resp.status_code == 200:
-            return json.loads(resp.text)['response']
+            return json.loads(resp.text).get('response', None)
 
         if resp.status_code == 429:
             print("Too many requests to vk api. Retrying...")
@@ -51,7 +51,7 @@ def fill_post_ids(vk_token, start_date, vk_group_id, vk_group_domain):
 
     while True:
         bucket = get_posts(vk_token, owner_id=vk_group_id, domain=vk_group_domain, count=bucket_size, offset=offset) 
-        if bucket is None:
+        if not bucket:
             break
 
         bucket_ids = list(map(extract_id, bucket))

@@ -1,12 +1,15 @@
 import vk
 import tg
+import models
 
+import sqlalchemy
 import argparse
 import datetime
 import json
 import os
 
 from datetime import datetime
+from collections import namedtuple
 from dotenv import load_dotenv
 
 # Globals TODO: Remove
@@ -15,6 +18,7 @@ smpm_domain = 'publicepsilon777'
 db_path = os.getenv('DB_PATH', 'db.json')
 start_transmitting_date = datetime(year=2023, month=5, day=1, 
                                    hour=0, minute=0, second=0)
+mirrors = []
 
 def send_post(token, chat_id, post):
     photos = extract_photos(post)
@@ -99,24 +103,95 @@ def get_command(vk_token, tg_token, msg, owner_id, domain, offset=0):
                         count=1, offset=offset)[0]
     send_post(tg_token, msg['chat']['id'], post)
 
-def transmit_posts(vk_token, tg_token, start_date, vk_group_id, vk_group_domain, tg_mirror_id):
-    global start_transmitting_date
-    ids = vk.fill_post_ids(vk_token, start_date, vk_group_id, vk_group_domain)
+def create_command(vk_token, tg_token, msg, 
+                   tg_mirror_id, vk_group_id, vk_group_name, 
+                   start_date = None, start_time = None):
+    date_format = "%Y/%m/%d"
+    time_format = "%H:%M:%S" 
+    start_datetime = None
+
+    if start_date and start_time:
+        start_datetime = start_date + ' ' + start_time
+        start_datetime = datetime.strptime(start_datetime, 
+                                           f"{date_format} {time_format}")
+    elif start_date:
+        start_datetime = datetime.strptime(start_date, date_format) 
+
+    if not start_datetime: 
+        start_datetime = datetime.now()
+
+    mirror = models.Mirror(
+        tg_mirror_id=tg_mirror_id,
+        vk_group_id=vk_group_id,
+        vk_group_name=vk_group_name,
+        start_datetime=start_datetime
+    )
+
+    # Add mirror to database 
+    with sqlalchemy.orm.Session(models.engine) as sus:
+        sus.add(mirror)
+        sus.commit()
+
+def list_command(vk_token, tg_token, msg):
+    chat_id = msg['chat']['id']
+    text_list = ['List of mirrors:'] 
+    mirror_text = '{}: {} -> {}\nLast mirrored post datetime: {}'
+
+    for mirror in mirrors:
+        formated_text = mirror_text.format(mirror.id, 
+                                           mirror.vk_group_name, 
+                                           mirror.tg_mirror_id,
+                                           mirror.start_datetime.strftime("%d/%m/%Y %H:%M:%S"))
+        text_list.append(formated_text)
+
+    tg.send_message(tg_token, msg['chat']['id'], '\n'.join(text_list))
+
+def delete_command(vk_token, tg_token, msg, mirror_id):
+    mirror_id = int(mirror_id)
+    with sqlalchemy.orm.Session(models.engine) as sus:
+        mirror = sus.get(models.Mirror, mirror_id)
+        sus.delete(mirror)
+        sus.commit()
+
+def getid_command(vk_token, tg_token, msg):
+    print(msg)
+    tg.send_message(tg_token, msg['chat']['id'], f"{msg['chat']['id']}")
+
+def transmit_posts(vk_token, tg_token, mirror : models.Mirror):
+    ids = vk.fill_post_ids(vk_token, mirror.start_datetime, 
+                           mirror.vk_group_id, mirror.vk_group_name)
     ids_len = len(ids)
+    last_post_datetime = None
 
-    for i in range(0, len(ids), vk.MAX_VK_POSTS_PER_REQUEST):  
-        j = min(i + vk.MAX_VK_POSTS_PER_REQUEST, len(ids)) 
-        posts = vk.get_posts_by_ids(vk_token, ids[i:j]) 
-        print(f"Loaded posts from {i + 1} to {j}")
-        post_idx = i
+    try:
+        for i in range(0, len(ids), vk.MAX_VK_POSTS_PER_REQUEST):  
+            j = min(i + vk.MAX_VK_POSTS_PER_REQUEST, len(ids)) 
+            posts = vk.get_posts_by_ids(vk_token, ids[i:j]) 
+            print(f"Loaded posts from {i + 1} to {j}")
+            post_idx = i
 
-        for post in posts:
-            print(f"Transmission {post_idx}/{ids_len}")
-            post_idx += 1
-            if post:
-                send_post(tg_token, tg_mirror_id, post)
-                start_transmitting_date = datetime.fromtimestamp(post['date'])
-                commit_changes_to_db()
+            for post in posts:
+                print(f"Transmission {post_idx}/{ids_len}")
+                post_idx += 1
+                if post:
+                    send_post(tg_token, mirror.tg_mirror_id, post)
+                    last_post_datetime = datetime.fromtimestamp(post['date'])
+    except:
+        return last_post_datetime
+    return last_post_datetime
+
+def send_posts_to_mirrors(vk_token, tg_token):
+    global mirrors  
+
+    for mirror in mirrors:
+        new_start_datetime = transmit_posts(vk_token, tg_token, mirror)
+        if not new_start_datetime:
+            continue
+
+        with sqlalchemy.orm.Session(models.engine) as sus:
+            sus_mirror = sus.get(models.Mirror, mirror.id)
+            sus_mirror.start_datetime = new_start_datetime
+            sus.commit()
 
 def datetime_to_dict(dt):
     return { 'year' : dt.year, 'month' : dt.month, 'day' : dt.day, 'hour' : dt.hour, 'minute' : dt.minute, 'second' : dt.second }
@@ -142,8 +217,24 @@ def load_from_db():
         if db is not None:
             db.close()
 
+def refresh_mirrors_list():
+    global mirrors
+
+    with sqlalchemy.orm.Session(models.engine) as sus:
+        mirrors = sus.execute(sqlalchemy.select(models.Mirror)).scalars().all()
+
+    print("Got mirrors:")
+    print(mirrors)
+
 def try_exec_text_msg(msg, vk_token, tg_token):
-    commands = { 'help' : help_command, 'get' : get_command }
+    commands = { 
+                'help' : help_command, 
+                'get' : get_command,
+                'create' : create_command,
+                'list' : list_command,
+                'delete' : delete_command,
+                'getid' : getid_command
+               }
     text = msg['text'].strip()
     if not is_command(text):
         return 
@@ -161,6 +252,8 @@ def process_updates(updates, vk_token, tg_token):
     for update in updates: 
         if 'message' in update and 'text' in update['message']: 
             try_exec_text_msg(update['message'], vk_token, tg_token)
+        elif 'channel_post' in update:
+            try_exec_text_msg(update['channel_post'], vk_token, tg_token)
 
 def setup_args():
     parser = argparse.ArgumentParser()
@@ -196,8 +289,10 @@ def main():
 
     while True:
         if args.mirror:
-            transmit_posts(vk_token, tg_token, 
-                           start_transmitting_date, smpm_id, smpm_domain, mirror_id)
+            refresh_mirrors_list()
+            send_posts_to_mirrors(vk_token, tg_token)
+            # transmit_posts(vk_token, tg_token, 
+            #                start_transmitting_date, smpm_id, smpm_domain, mirror_id)
 
         updates = tg.get_tg_updates(tg_token, offset)
         if updates:
