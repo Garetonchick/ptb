@@ -239,18 +239,20 @@ def main():
     if args.load:
         load_dotenv(args.load) 
 
-    models.init(os.getenv('DB_USER'), os.getenv('DB_HOST'), 
-                os.getenv('DB_DB'), os.getenv('DB_PASSWORD'),
-                os.getenv('DB_PORT', '6644'))
+    if args.mirror:
+        models.init(os.getenv('DB_USER'), os.getenv('DB_HOST'), 
+                    os.getenv('DB_DB'), os.getenv('DB_PASSWORD'),
+                    os.getenv('DB_PORT', '6644'))
 
     vk_token = os.getenv('VK_TOKEN')
     tg_token = os.getenv('TG_TOKEN')
-    if vk_token is None:
+    if not vk_token:
         print('Missing vk token in env')
         exit(0)
-    if tg_token is None:
+    if not tg_token:
         print('Missing tg token in env')
         exit(0)
+    print(f"VK token: {vk_token}\nTG token: {tg_token}")
 
     offset = None 
 

@@ -1,0 +1,28 @@
+services:
+  ptb_db:
+    image: postgres:14.8-alpine3.18
+    environment:
+      POSTGRES_DB: "ptb_db"
+      POSTGRES_USER: "admin"
+      POSTGRES_PASSWORD: "password"
+      PGDATA: "/var/lib/postgresql/data/pgdata"
+    volumes:
+      - ptb_db_data:/var/lib/postgresql/data
+    expose:
+      - 5432
+
+  ptb:
+    image: ptb:0.2 # Change to gareton/ptb after testing
+    command: sh -c "python bot.py --mirror"
+    environment:
+      DB_HOST: ptb_db
+      DB_DB: "ptb_db"
+      DB_USER: "admin"
+      DB_PASSWORD: "password"
+      DB_PORT: "5432"
+    env_file: ./test.env # Change to your .env config file
+    depends_on:
+      - ptb_db
+
+volumes:
+  ptb_db_data:
