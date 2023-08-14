@@ -5,7 +5,8 @@ import time
 
 from urllib.parse import quote as encode_url
 
-MAX_VK_POSTS_PER_REQUEST = 100 
+MAX_VK_POSTS_PER_REQUEST = 100
+
 
 def send_vk_api_request_impl(name, args, version):
     req_url = 'https://api.vk.com/method/' + name + '?'
@@ -19,6 +20,7 @@ def send_vk_api_request_impl(name, args, version):
 
     return resp
 
+
 def send_vk_api_request(name, args, version='5.131'):
     while True:
         resp = send_vk_api_request_impl(name, args, version)
@@ -31,18 +33,22 @@ def send_vk_api_request(name, args, version='5.131'):
 
         if resp.status_code == 429:
             print("Too many requests to vk api. Retrying...")
-            time.sleep(0.4) 
+            time.sleep(0.4)
         else:
             print(f"Bad request to vk api. Response code {resp.status_code}")
             break
     return None
 
-def get_posts(token, owner_id='1', domain='apiclub', offset=0, count=1, flt='all'): 
-    resp = send_vk_api_request('wall.get', {'access_token' : token, 'owner_id' : '-' + owner_id, 'domain' : domain, 'offset' : offset, 'count' : count, 'filter' : flt})
-    return resp['items'] if resp else [] 
+
+def get_posts(token, owner_id='1', domain='apiclub', offset=0, count=1, flt='all'):
+    resp = send_vk_api_request('wall.get', {'access_token': token, 'owner_id': '-' +
+                               owner_id, 'domain': domain, 'offset': offset, 'count': count, 'filter': flt})
+    return resp['items'] if resp else []
+
 
 def extract_id(post):
     return '{}_{}'.format(post['owner_id'], post['id'])
+
 
 def fill_post_ids(vk_token, start_date, vk_group_id, vk_group_domain):
     ids = []
@@ -50,14 +56,18 @@ def fill_post_ids(vk_token, start_date, vk_group_id, vk_group_domain):
     offset = 1
 
     while True:
-        bucket = get_posts(vk_token, owner_id=vk_group_id, domain=vk_group_domain, count=bucket_size, offset=offset) 
+        bucket = get_posts(
+            vk_token, owner_id=vk_group_id,
+            domain=vk_group_domain, count=bucket_size, offset=offset
+        )
         if not bucket:
             break
 
         bucket_ids = list(map(extract_id, bucket))
 
         if datetime.fromtimestamp(bucket[-1]['date']) <= start_date:
-            bad_idx = next(filter(lambda x: datetime.fromtimestamp(x[1]['date']) <= start_date, enumerate(bucket)))[0]
+            bad_idx = next(filter(lambda x: datetime.fromtimestamp(
+                x[1]['date']) <= start_date, enumerate(bucket)))[0]
             ids += bucket_ids[:bad_idx]
             offset += bad_idx
             break
@@ -67,22 +77,24 @@ def fill_post_ids(vk_token, start_date, vk_group_id, vk_group_domain):
             ids += bucket_ids[skip:]
         else:
             ids += bucket_ids
-        offset += len(bucket) 
+        offset += len(bucket)
         bucket_size = min(MAX_VK_POSTS_PER_REQUEST, bucket_size * 2)
 
     ids.reverse()
     return ids
 
-def get_posts_by_ids(token, ids): 
+
+def get_posts_by_ids(token, ids):
     global MAX_VK_POSTS_PER_REQUEST
-    posts = [] 
+    posts = []
 
     for i in range(0, len(ids), MAX_VK_POSTS_PER_REQUEST):
         bucket_size = min(len(ids) - i, MAX_VK_POSTS_PER_REQUEST)
         ids_for_url = ','.join(ids[i:i+bucket_size])
-        resp = send_vk_api_request('wall.getById', {'access_token' : token, 'posts' : ids_for_url})
-        
+        resp = send_vk_api_request(
+            'wall.getById', {'access_token': token, 'posts': ids_for_url})
+
         if resp:
             posts += resp
 
-    return posts 
+    return posts
