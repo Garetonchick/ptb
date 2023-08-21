@@ -41,15 +41,15 @@ def send_post(token, chat_id, post):
 
 
 def extract_photo(photo_obj):
-    bstw = 0
-    bsth = 0
+    bstw = photo_obj.get('width', 0)
+    bsth = photo_obj.get('height', 0)
     bst_url = ""
     for scaled_photo in photo_obj['sizes']:
         w = scaled_photo['width']
         h = scaled_photo['height']
-        if w > bstw or h > bsth:
-            w = bstw
-            h = bsth
+        if w >= bstw and h >= bsth:
+            bstw = w
+            bsth = h
             bst_url = scaled_photo['url']
     return bst_url
 
