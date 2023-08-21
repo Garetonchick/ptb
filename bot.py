@@ -1,6 +1,7 @@
 import vk
 import tg
 import models
+import mirror_engine
 
 import sqlalchemy
 import argparse
@@ -8,9 +9,7 @@ import os
 
 from datetime import datetime
 from dotenv import load_dotenv
-
-# Globals TODO: Remove
-mirrors = []
+from multiprocessing import Process
 
 
 def send_post(token, chat_id, post):
@@ -136,6 +135,7 @@ def create_command(vk_token, tg_token, msg,
 def list_command(vk_token, tg_token, msg):
     text_list = ['List of mirrors:']
     mirror_text = '{}: {} -> {}\nLast mirrored post datetime: {}'
+    mirrors = mirror_engine.load_mirrors_list()
 
     for mirror in mirrors:
         formated_text = mirror_text.format(
@@ -160,54 +160,6 @@ def delete_command(vk_token, tg_token, msg, mirror_id):
 def getid_command(vk_token, tg_token, msg):
     print(msg)
     tg.send_message(tg_token, msg['chat']['id'], f"{msg['chat']['id']}")
-
-
-def transmit_posts(vk_token, tg_token, mirror: models.Mirror):
-    ids = vk.fill_post_ids(vk_token, mirror.start_datetime,
-                           mirror.vk_group_id, mirror.vk_group_name)
-    ids_len = len(ids)
-    last_post_datetime = None
-
-    try:
-        for i in range(0, len(ids), vk.MAX_VK_POSTS_PER_REQUEST):
-            j = min(i + vk.MAX_VK_POSTS_PER_REQUEST, len(ids))
-            posts = vk.get_posts_by_ids(vk_token, ids[i:j])
-            print(f"Loaded posts from {i + 1} to {j}")
-            post_idx = i
-
-            for post in posts:
-                print(f"Transmission {post_idx}/{ids_len}")
-                post_idx += 1
-                if post:
-                    send_post(tg_token, mirror.tg_mirror_id, post)
-                    last_post_datetime = datetime.fromtimestamp(post['date'])
-    except:
-        return last_post_datetime
-    return last_post_datetime
-
-
-def send_posts_to_mirrors(vk_token, tg_token):
-    global mirrors
-
-    for mirror in mirrors:
-        new_start_datetime = transmit_posts(vk_token, tg_token, mirror)
-        if not new_start_datetime:
-            continue
-
-        with sqlalchemy.orm.Session(models.engine) as sus:
-            sus_mirror = sus.get(models.Mirror, mirror.id)
-            sus_mirror.start_datetime = new_start_datetime
-            sus.commit()
-
-
-def refresh_mirrors_list():
-    global mirrors
-
-    with sqlalchemy.orm.Session(models.engine) as sus:
-        mirrors = sus.execute(sqlalchemy.select(models.Mirror)).scalars().all()
-
-    print("Got mirrors:")
-    print(mirrors)
 
 
 def try_exec_text_msg(msg, vk_token, tg_token):
@@ -252,14 +204,17 @@ def setup_args():
 
 def main():
     args = setup_args()
+    mirror_process = Process(target=mirror_engine.main, daemon=True)
 
     if args.load:
         load_dotenv(args.load)
 
     if args.mirror:
-        models.init(os.getenv('DB_USER'), os.getenv('DB_HOST'),
-                    os.getenv('DB_DB'), os.getenv('DB_PASSWORD'),
-                    os.getenv('DB_PORT', '6644'))
+        mirror_process.start()
+
+    models.init(os.getenv('DB_USER'), os.getenv('DB_HOST'),
+                os.getenv('DB_DB'), os.getenv('DB_PASSWORD'),
+                os.getenv('DB_PORT', '6644'))
 
     vk_token = os.getenv('VK_TOKEN')
     tg_token = os.getenv('TG_TOKEN')
@@ -274,10 +229,6 @@ def main():
     offset = None
 
     while True:
-        if args.mirror:
-            refresh_mirrors_list()
-            send_posts_to_mirrors(vk_token, tg_token)
-
         updates = tg.get_tg_updates(tg_token, offset)
         if updates:
             offset = updates[-1]['update_id'] + 1

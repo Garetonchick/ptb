@@ -33,7 +33,7 @@ class Mirror(Base):
 engine = None
 
 
-def init(username, host, database, password, port='5432'):
+def init(username, host, database, password, port='5432', create_scheme=True):
     global engine
     url = URL.create(
         drivername="postgresql",
@@ -45,4 +45,5 @@ def init(username, host, database, password, port='5432'):
     )
 
     engine = create_engine(url, echo=True)
-    Base.metadata.create_all(engine)
+    if create_scheme:
+        Base.metadata.create_all(engine)

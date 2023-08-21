@@ -35,6 +35,11 @@ docker-compose.yaml. It is `test.env` by default.
     python3 bot.py --load settings.env --mirror
 ```
 
+To run db you can use:
+```
+    docker run --name pdb_db -p 6644:5432 -e POSTGRES_USER=admin -e POSTGRES_PASSWORD=password -e POSTGRES_DB=ptb_db -e PGDATA=/var/lib/postgresql/data/pgdata -v "ptb_db_data:/var/lib/postgresql/data" -d postgres:13.3
+```
+
 ## Usage
 To see all options and their usage use `-h` option.
 To see all bot's commands send him `/help` message.
