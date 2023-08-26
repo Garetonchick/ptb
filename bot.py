@@ -3,7 +3,8 @@ import tg
 import models
 import mirror_engine
 
-import sqlalchemy
+import sqlalchemy as sql
+import sqlalchemy.orm as orm
 import argparse
 import os
 
@@ -75,16 +76,6 @@ def is_command(s):
 
 
 def parse_command(s):
-    """
-        Parse command from text
-    Imput:
-        s : str
-    Output:
-        (command_name, args) : tuple
-        Where:
-        command_name : str
-        args : dict
-    """
     splits = s.split()
     return (splits[0][1:], splits[1:])
 
@@ -119,20 +110,25 @@ def create_command(vk_token, tg_token, msg,
     if not start_datetime:
         start_datetime = datetime.now()
 
+    user = models.User(
+        tg_username=msg
+    )
+
     mirror = models.Mirror(
         tg_mirror_id=tg_mirror_id,
         vk_group_id=vk_group_id,
         vk_group_name=vk_group_name,
-        start_datetime=start_datetime
+        start_datetime=start_datetime,
+        user=user
     )
 
     # Add mirror to database
-    with sqlalchemy.orm.Session(models.engine) as sus:
+    with orm.Session(models.engine) as sus:
         sus.add(mirror)
         sus.commit()
 
 
-def list_command(vk_token, tg_token, msg):
+def list_mirrors_command(vk_token, tg_token, msg):
     text_list = ['List of mirrors:']
     mirror_text = '{}: {} -> {}\nLast mirrored post datetime: {}'
     mirrors = mirror_engine.load_mirrors_list()
@@ -149,17 +145,80 @@ def list_command(vk_token, tg_token, msg):
     tg.send_message(tg_token, msg['chat']['id'], '\n'.join(text_list))
 
 
+def list_channels_command(vk_token, tg_token, msg):
+    user_id = str(msg['from']['id'])
+    channels_desc = []
+    desc_format = 'id: {}, name: {}'
+    with orm.Session(models.engine) as sus:
+        slct = sql.select(models.User).where(
+            models.User.tg_user_id == user_id
+        )
+        admin = sus.execute(slct).scalar()
+        if not admin:
+            tg.send_message(tg_token,
+                            msg['chat']['id'], "You don't own any channels")
+            return
+        for channel in admin.channels:
+            channels_desc.append(
+                desc_format.format(
+                    channel.tg_channel_id, channel.tg_channel_name
+                )
+            )
+    tg.send_message(
+        tg_token, msg['chat']['id'], '\n'.join(channels_desc)
+    )
+
+
 def delete_command(vk_token, tg_token, msg, mirror_id):
     mirror_id = int(mirror_id)
-    with sqlalchemy.orm.Session(models.engine) as sus:
+    with orm.Session(models.engine) as sus:
         mirror = sus.get(models.Mirror, mirror_id)
         sus.delete(mirror)
         sus.commit()
 
 
-def getid_command(vk_token, tg_token, msg):
-    print(msg)
+def get_chat_id_command(vk_token, tg_token, msg):
     tg.send_message(tg_token, msg['chat']['id'], f"{msg['chat']['id']}")
+
+
+def get_my_id_command(vk_token, tg_token, msg):
+    tg.send_message(tg_token, msg['chat']['id'],
+                    f"{msg.get('from', {}).get('id')}")
+
+
+def add_admin_command(vk_token, tg_token, msg, id):
+    print(msg)
+    channel_id = str(msg['chat']['id'])
+    new_admin = models.User(tg_user_id=id)
+
+    with orm.Session(models.engine) as sus:
+        slct = sql.select(models.User).where(
+            models.User.tg_user_id == id
+        )
+        admin = sus.execute(slct).scalar()
+
+        if not admin:
+            sus.add(new_admin)
+            admin = new_admin
+
+        new_channel = models.Channel(
+            tg_channel_id=channel_id,
+            tg_channel_name=msg['chat']['title'],
+            users=[admin]
+        )
+
+        slct = sql.select(models.Channel).where(
+            models.Channel.tg_channel_id == channel_id
+        )
+        channel = sus.execute(slct).scalar()
+
+        if channel:
+            channel.users.append(admin)
+        else:
+            channel = new_channel
+            sus.add(channel)
+
+        sus.commit()
 
 
 def try_exec_text_msg(msg, vk_token, tg_token):
@@ -167,9 +226,12 @@ def try_exec_text_msg(msg, vk_token, tg_token):
         'help': help_command,
         'get': get_command,
         'create': create_command,
-        'list': list_command,
+        'list_mirrors': list_mirrors_command,
+        'list_channels': list_channels_command,
         'delete': delete_command,
-        'getid': getid_command
+        'get_chat_id': get_chat_id_command,
+        'get_my_id': get_my_id_command,
+        'add_admin': add_admin_command
     }
     text = msg['text'].strip()
     if not is_command(text):
@@ -196,25 +258,40 @@ def process_updates(updates, vk_token, tg_token):
 def setup_args():
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "-m", "--mirror", help="enable mirror", action="store_true")
-    parser.add_argument("-l", "--load", metavar='FILE.env',
-                        help="load settings from FILE.env")
+        "-m", "--mirror",
+        help="enable mirror",
+        action="store_true"
+    )
+    parser.add_argument(
+        "--no-db", dest="no_db",
+        help="don't connect to db",
+        action="store_true"
+    )
+    parser.add_argument(
+        "-l", "--load",
+        metavar='FILE.env',
+        help="load settings from FILE.env"
+    )
     return parser.parse_args()
 
 
 def main():
     args = setup_args()
-    mirror_process = Process(target=mirror_engine.main, daemon=True)
-
+    mirror_process = Process(
+        target=mirror_engine.main,
+        daemon=True
+    )
     if args.load:
         load_dotenv(args.load)
 
+    if not args.no_db:
+        models.init(
+            os.getenv('DB_USER'), os.getenv('DB_HOST'),
+            os.getenv('DB_DB'), os.getenv('DB_PASSWORD'),
+            os.getenv('DB_PORT', '6644')
+        )
     if args.mirror:
         mirror_process.start()
-
-    models.init(os.getenv('DB_USER'), os.getenv('DB_HOST'),
-                os.getenv('DB_DB'), os.getenv('DB_PASSWORD'),
-                os.getenv('DB_PORT', '6644'))
 
     vk_token = os.getenv('VK_TOKEN')
     tg_token = os.getenv('TG_TOKEN')
@@ -241,5 +318,3 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         print("")
         exit(0)
-
-# TODO: support multiple photos, gifs, video
