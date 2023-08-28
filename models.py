@@ -70,7 +70,6 @@ class Channel(Base):
             Channel(
                 id={self.id},
                 tg_channel_id={self.tg_channel_id},
-                mirror_id={self.mirror_id},
                 mirror={self.mirror},
                 users={self.users}
             )

@@ -87,15 +87,15 @@ def help_command(vk_token, tg_token, msg):
     tg.send_message(tg_token, msg['chat']['id'], text)
 
 
-def get_command(vk_token, tg_token, msg, owner_id, domain, offset=0):
+def get_post_command(vk_token, tg_token, msg, owner_id, domain, offset=0):
     post = vk.get_posts(vk_token, owner_id=owner_id, domain=domain,
                         count=1, offset=offset)[0]
     send_post(tg_token, msg['chat']['id'], post)
 
 
-def create_command(vk_token, tg_token, msg,
-                   tg_mirror_id, vk_group_id, vk_group_name,
-                   start_date=None, start_time=None):
+def add_mirror_command(vk_token, tg_token, msg,
+                       tg_mirror_id, vk_group_id, vk_group_name,
+                       start_date=None, start_time=None):
     date_format = "%Y/%m/%d"
     time_format = "%H:%M:%S"
     start_datetime = None
@@ -110,20 +110,42 @@ def create_command(vk_token, tg_token, msg,
     if not start_datetime:
         start_datetime = datetime.now()
 
-    user = models.User(
-        tg_username=msg
-    )
+    user_id = str(msg['from']['id'])
 
-    mirror = models.Mirror(
-        tg_mirror_id=tg_mirror_id,
-        vk_group_id=vk_group_id,
-        vk_group_name=vk_group_name,
-        start_datetime=start_datetime,
-        user=user
-    )
-
-    # Add mirror to database
     with orm.Session(models.engine) as sus:
+        slct = sql.select(models.User).where(
+            models.User.tg_user_id == user_id
+        )
+        admin = sus.execute(slct).scalar()
+        channel = None if not admin else next(
+            filter(lambda ch: ch.tg_channel_id == tg_mirror_id,
+                   admin.channels),
+            None
+        )
+        if not channel:
+            tg.send_message(tg_token,
+                            msg['chat']['id'],
+                            "You don't own this channel")
+            return
+        if channel.mirror:
+            print("Mirror is:")
+            print(channel.mirror)
+            tg.send_message(
+                tg_token,
+                msg['chat']['id'],
+                f"""
+                    Existing mirror is already binded to this channel.
+                    Use \"/delete_mirror {channel.mirror[0].id}\" to delete it.
+                """
+            )
+            return
+
+        mirror = models.Mirror(
+            vk_group_id=vk_group_id,
+            vk_group_name=vk_group_name,
+            start_datetime=start_datetime,
+            channel=channel
+        )
         sus.add(mirror)
         sus.commit()
 
@@ -131,16 +153,17 @@ def create_command(vk_token, tg_token, msg,
 def list_mirrors_command(vk_token, tg_token, msg):
     text_list = ['List of mirrors:']
     mirror_text = '{}: {} -> {}\nLast mirrored post datetime: {}'
-    mirrors = mirror_engine.load_mirrors_list()
 
-    for mirror in mirrors:
-        formated_text = mirror_text.format(
-            mirror.id,
-            mirror.vk_group_name,
-            mirror.tg_mirror_id,
-            mirror.start_datetime.strftime("%d/%m/%Y %H:%M:%S")
-        )
-        text_list.append(formated_text)
+    with orm.Session(models.engine) as sus:
+        mirrors = sus.execute(sql.select(models.Mirror)).scalars().all()
+        for mirror in mirrors:
+            formated_text = mirror_text.format(
+                mirror.id,
+                mirror.vk_group_name,
+                mirror.channel.tg_channel_id,
+                mirror.start_datetime.strftime("%d/%m/%Y %H:%M:%S")
+            )
+            text_list.append(formated_text)
 
     tg.send_message(tg_token, msg['chat']['id'], '\n'.join(text_list))
 
@@ -169,12 +192,30 @@ def list_channels_command(vk_token, tg_token, msg):
     )
 
 
-def delete_command(vk_token, tg_token, msg, mirror_id):
-    mirror_id = int(mirror_id)
+def delete_mirror_command(vk_token, tg_token, msg, mirror_id):
+    user_id = str(msg['from']['id'])
+
     with orm.Session(models.engine) as sus:
-        mirror = sus.get(models.Mirror, mirror_id)
-        sus.delete(mirror)
+        slct = sql.select(models.User).where(
+            models.User.tg_user_id == user_id
+        )
+        admin = sus.execute(slct).scalar()
+
+        print("Lol")
+        channel = None if not admin else next(
+            filter(lambda ch: ch.mirror and str(ch.mirror[0].id) == mirror_id,
+                   admin.channels),
+            None
+        )
+        print("Kek")
+
+        if not channel or not channel.mirror:
+            tg.send_message(
+                tg_token, msg['chat']['id'], "You don't own this mirror"
+            )
+        sus.delete(channel.mirror[0])
         sus.commit()
+    tg.send_message(tg_token, msg['chat']['id'], "Deleted")
 
 
 def get_chat_id_command(vk_token, tg_token, msg):
@@ -224,11 +265,11 @@ def add_admin_command(vk_token, tg_token, msg, id):
 def try_exec_text_msg(msg, vk_token, tg_token):
     commands = {
         'help': help_command,
-        'get': get_command,
-        'create': create_command,
+        'get_post': get_post_command,
+        'add_mirror': add_mirror_command,
         'list_mirrors': list_mirrors_command,
         'list_channels': list_channels_command,
-        'delete': delete_command,
+        'delete_mirror': delete_mirror_command,
         'get_chat_id': get_chat_id_command,
         'get_my_id': get_my_id_command,
         'add_admin': add_admin_command

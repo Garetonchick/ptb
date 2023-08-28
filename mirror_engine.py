@@ -27,30 +27,27 @@ def transmit_posts(vk_token, tg_token, mirror: models.Mirror):
                 print(f"Transmission {post_idx}/{ids_len}")
                 post_idx += 1
                 if post:
-                    bot.send_post(tg_token, mirror.tg_mirror_id, post)
+                    bot.send_post(tg_token, mirror.channel.tg_channel_id, post)
                     last_post_datetime = datetime.fromtimestamp(post['date'])
     except:
         return last_post_datetime
     return last_post_datetime
 
 
-def load_mirrors_list():
-    mirrors = []
-    with orm.Session(models.engine) as sus:
-        mirrors = sus.execute(sql.select(models.Mirror)).scalars().all()
+def load_mirrors_list(sus):
+    mirrors = sus.execute(sql.select(models.Mirror)).scalars().all()
     return mirrors if mirrors else []
 
 
-def mirror_mirrors(mirrors, vk_token, tg_token):
+def mirror_mirrors(sus, vk_token, tg_token):
+    mirrors = load_mirrors_list(sus)
     for mirror in mirrors:
         new_start_datetime = transmit_posts(vk_token, tg_token, mirror)
         if not new_start_datetime:
             continue
 
-        with orm.Session(models.engine) as sus:
-            sus_mirror = sus.get(models.Mirror, mirror.id)
-            sus_mirror.start_datetime = new_start_datetime
-            sus.commit()
+        mirror.start_datetime = new_start_datetime
+        sus.commit()
 
 
 def main():
@@ -69,8 +66,8 @@ def main():
                 os.getenv('DB_DB'), os.getenv('DB_PASSWORD'),
                 os.getenv('DB_PORT', '6644'), create_scheme=False)
     while True:
-        mirrors = load_mirrors_list()
-        mirror_mirrors(mirrors, vk_token, tg_token)
+        with orm.Session(models.engine) as sus:
+            mirror_mirrors(sus, vk_token, tg_token)
         sleep(1)  # TODO: Change/remove
 
 
