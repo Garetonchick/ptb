@@ -11,64 +11,40 @@ import os
 from datetime import datetime
 from dotenv import load_dotenv
 from multiprocessing import Process
+from copy import deepcopy
 
 
-def send_post(token, chat_id, post):
-    photos = extract_photos(post)
-    gifs = extract_gifs(post)
-    print(post)
+def send_post(token, chat_id, post, reply_to=None, parse_mode=None,
+              format_str="{}"):
+    photos = vk.extract_photos(post)
+    gifs = vk.extract_gifs(post)
+    text = format_str.format(post['text'])
 
     if photos and gifs:
         print("Too much media in one post")
-        return
+        return None
 
     if gifs:
         print('Has gifs!!!!')
-        tg.send_animation(token, chat_id, gifs[0], caption=post['text'])
-        return
+        msg = tg.send_animation(token, chat_id, gifs[0], caption=text,
+                                reply_to=reply_to, parse_mode=parse_mode)
+        return msg
 
     if not photos and not ('text' in post):
-        return
+        return None
 
     if not photos:
-        tg.send_message(token, chat_id, post['text'])
-        return
+        msg = tg.send_message(token, chat_id, text, reply_to=reply_to,
+                              parse_mode=parse_mode)
+        return msg
 
     if len(photos) == 1:
-        tg.send_photo(token, chat_id, photos[0], caption=post['text'])
-        return
+        msg = tg.send_photo(token, chat_id, photos[0], caption=text,
+                            reply_to=reply_to, parse_mode=parse_mode)
+        return msg
 
-    tg.send_multiphoto(token, chat_id, photos, caption=post['text'])
-
-
-def extract_photo(photo_obj):
-    bstw = photo_obj.get('width', 0)
-    bsth = photo_obj.get('height', 0)
-    bst_url = ""
-    for scaled_photo in photo_obj['sizes']:
-        w = scaled_photo['width']
-        h = scaled_photo['height']
-        if w >= bstw and h >= bsth:
-            bstw = w
-            bsth = h
-            bst_url = scaled_photo['url']
-    return bst_url
-
-
-def extract_photos(post):
-    photos = []
-    for attachment in post['attachments']:
-        if attachment['type'] == "photo":
-            photos.append(extract_photo(attachment['photo']))
-    return photos
-
-
-def extract_gifs(post):
-    gifs = []
-    for attachment in post['attachments']:
-        if attachment['type'] == 'doc' and attachment['doc']['ext'] == 'gif':
-            gifs.append(attachment['doc']['url'])
-    return gifs
+    return tg.send_multiphoto(token, chat_id, photos, caption=text,
+                              reply_to=reply_to, parse_mode=parse_mode)
 
 
 def is_command(s):
@@ -262,6 +238,40 @@ def add_admin_command(vk_token, tg_token, msg, id):
         sus.commit()
 
 
+def link_chat_command(vk_token, tg_token, msg, channel_id):
+    chat_id = str(msg['chat']['id'])
+
+    with orm.Session(models.engine) as sus:
+        slct = sql.select(models.Channel).where(
+            models.Channel.tg_channel_id == channel_id
+        )
+        channel = sus.execute(slct).scalar()
+
+        if not channel:
+            tg.send_message(
+                tg_token, msg['chat']['id'], "You don't own this channel"
+            )
+            return
+
+        channel.tg_linked_chat_id = chat_id
+        sus.commit()
+
+
+def try_link_post(msg):
+    try:
+        channel_post_id = str(msg['forward_from_message_id'])
+        with orm.Session(models.engine) as sus:
+            slct = sql.select(models.Post).where(
+                models.Post.tg_post_id == channel_post_id
+            )
+            post = sus.scalars(slct).one()
+            post.tg_linked_chat_post_id = str(msg['message_id'])
+            sus.commit()
+    except Exception:
+        print("Failed to link post")
+        pass
+
+
 def try_exec_text_msg(msg, vk_token, tg_token):
     commands = {
         'help': help_command,
@@ -272,7 +282,8 @@ def try_exec_text_msg(msg, vk_token, tg_token):
         'delete_mirror': delete_mirror_command,
         'get_chat_id': get_chat_id_command,
         'get_my_id': get_my_id_command,
-        'add_admin': add_admin_command
+        'add_admin': add_admin_command,
+        'link_chat': link_chat_command
     }
     text = msg['text'].strip()
     if not is_command(text):
@@ -290,6 +301,10 @@ def try_exec_text_msg(msg, vk_token, tg_token):
 
 def process_updates(updates, vk_token, tg_token):
     for update in updates:
+        print("Got update")
+        if 'message' in update and 'is_automatic_forward' in update['message']:
+            print("Got automatic forward")
+            try_link_post(deepcopy(update['message']))
         if 'message' in update and 'text' in update['message']:
             try_exec_text_msg(update['message'], vk_token, tg_token)
         elif 'channel_post' in update:
@@ -306,6 +321,11 @@ def setup_args():
     parser.add_argument(
         "--no-db", dest="no_db",
         help="don't connect to db",
+        action="store_true"
+    )
+    parser.add_argument(
+        "--echo_sql", dest="echo_sql",
+        help="Echo sql queries",
         action="store_true"
     )
     parser.add_argument(
@@ -329,7 +349,8 @@ def main():
         models.init(
             os.getenv('DB_USER'), os.getenv('DB_HOST'),
             os.getenv('DB_DB'), os.getenv('DB_PASSWORD'),
-            os.getenv('DB_PORT', '6644')
+            os.getenv('DB_PORT', '6644'),
+            echo=bool(args.echo_sql)
         )
     if args.mirror:
         mirror_process.start()
