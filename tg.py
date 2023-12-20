@@ -108,3 +108,17 @@ def send_multiphoto(token, chat_id, photos, caption=None, parse_mode=None):
         else:
             photos[i] = create_input_media_photo(url)
     return send_media_group(token, chat_id, photos)
+
+
+def poll_tg_updates(handler, tg_token):
+    offset = None
+    while True:
+        updates = get_tg_updates(tg_token, offset)
+        if not updates:
+            continue
+
+        offset = updates[-1]['update_id'] + 1
+
+        for update in updates:
+            handler(update)
+        time.sleep(0.1)

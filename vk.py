@@ -1,8 +1,9 @@
 import requests
-from datetime import datetime
 import json
 import time
+import logging as log
 
+from datetime import datetime
 from urllib.parse import quote as encode_url
 
 MAX_VK_POSTS_PER_REQUEST = 100
@@ -75,7 +76,8 @@ def get_comments(
         thread_items_count=0,
         preview_length=0
 ):
-    print("get_comments", f"owner_id={owner_id}, post_id={post_id}")
+    print("Getting comments")
+    log.debug(f"get_comments owner_id={owner_id}, post_id={post_id}")
     resp = send_vk_api_request('wall.getComments', {
         'access_token': token,
         'owner_id': owner_id,

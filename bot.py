@@ -6,12 +6,12 @@ import mirror_engine
 import sqlalchemy as sql
 import sqlalchemy.orm as orm
 import argparse
+import logging as log
 import os
 
 from datetime import datetime
 from dotenv import load_dotenv
 from multiprocessing import Process
-from copy import deepcopy
 
 
 def send_post(token, chat_id, post, reply_to=None, parse_mode=None,
@@ -21,11 +21,15 @@ def send_post(token, chat_id, post, reply_to=None, parse_mode=None,
     text = format_str.format(post['text'])
 
     if photos and gifs:
-        print("Too much media in one post")
+        log.warning(
+            f"""
+            Post {post.get('id')} of owner {post.get('owner_id')}
+            had too much media and was ommited
+            """
+        )
         return None
 
     if gifs:
-        print('Has gifs!!!!')
         msg = tg.send_animation(token, chat_id, gifs[0], caption=text,
                                 reply_to=reply_to, parse_mode=parse_mode)
         return msg
@@ -104,8 +108,6 @@ def add_mirror_command(vk_token, tg_token, msg,
                             "You don't own this channel")
             return
         if channel.mirror:
-            print("Mirror is:")
-            print(channel.mirror)
             tg.send_message(
                 tg_token,
                 msg['chat']['id'],
@@ -177,13 +179,11 @@ def delete_mirror_command(vk_token, tg_token, msg, mirror_id):
         )
         admin = sus.execute(slct).scalar()
 
-        print("Lol")
         channel = None if not admin else next(
             filter(lambda ch: ch.mirror and str(ch.mirror[0].id) == mirror_id,
                    admin.channels),
             None
         )
-        print("Kek")
 
         if not channel or not channel.mirror:
             tg.send_message(
@@ -204,7 +204,6 @@ def get_my_id_command(vk_token, tg_token, msg):
 
 
 def add_admin_command(vk_token, tg_token, msg, id):
-    print(msg)
     channel_id = str(msg['chat']['id'])
     new_admin = models.User(tg_user_id=id)
 
@@ -258,18 +257,15 @@ def link_chat_command(vk_token, tg_token, msg, channel_id):
 
 
 def try_link_post(msg):
-    try:
-        channel_post_id = str(msg['forward_from_message_id'])
-        with orm.Session(models.engine) as sus:
-            slct = sql.select(models.Post).where(
-                models.Post.tg_post_id == channel_post_id
-            )
-            post = sus.scalars(slct).one()
-            post.tg_linked_chat_post_id = str(msg['message_id'])
-            sus.commit()
-    except Exception:
-        print("Failed to link post")
-        pass
+    channel_post_id = str(msg['forward_from_message_id'])
+    with orm.Session(models.engine) as sus:
+        slct = sql.select(models.Post).where(
+            models.Post.tg_post_id == channel_post_id
+        )
+        posts = sus.scalars(slct).all()
+        if posts:
+            posts[0].tg_linked_chat_post_id = str(msg['message_id'])
+        sus.commit()
 
 
 def try_exec_text_msg(msg, vk_token, tg_token):
@@ -294,21 +290,30 @@ def try_exec_text_msg(msg, vk_token, tg_token):
         return
     try:
         commands[command_name](vk_token, tg_token, msg, *args)
-    except Exception as e:
-        print(f'Command "{command_name}" failed, args={args}')
-        print(f'Thrown exception:\n{e}')
+    except Exception:
+        log.error(f"Command '{command_name}' failed, args={args}")
+        raise
 
 
-def process_updates(updates, vk_token, tg_token):
-    for update in updates:
-        print("Got update")
-        if 'message' in update and 'is_automatic_forward' in update['message']:
-            print("Got automatic forward")
-            try_link_post(deepcopy(update['message']))
-        if 'message' in update and 'text' in update['message']:
-            try_exec_text_msg(update['message'], vk_token, tg_token)
+def process_message(msg, vk_token, tg_token):
+    if 'is_automatic_forward' in msg:
+        try_link_post(msg)
+    elif 'text' in msg:
+        try_exec_text_msg(msg, vk_token, tg_token)
+
+
+def process_channel_post(post, vk_token, tg_token):
+    try_exec_text_msg(post, vk_token, tg_token)
+
+
+def process_update(update, vk_token, tg_token):
+    try:
+        if 'message' in update:
+            process_message(update['message'], vk_token, tg_token)
         elif 'channel_post' in update:
-            try_exec_text_msg(update['channel_post'], vk_token, tg_token)
+            process_channel_post(update['channel_post'], vk_token, tg_token)
+    except Exception:
+        log.exception("Update handling failed. Raised exception:")
 
 
 def setup_args():
@@ -333,50 +338,85 @@ def setup_args():
         metavar='FILE.env',
         help="load settings from FILE.env"
     )
+    parser.add_argument(
+        "--log",
+        metavar='LEVEL',
+        help="log events with logging level LEVEL",
+        default="INFO"
+    )
     return parser.parse_args()
 
 
-def main():
-    args = setup_args()
+def setup_logging(logfile, loglevel: str):
+    loglevel_num = getattr(log, loglevel.upper(), None)
+    if not isinstance(loglevel_num, int):
+        raise ValueError('Invalid log level: %s' % loglevel)
+    log.basicConfig(
+        filename=logfile,
+        filemode="w",
+        level=loglevel
+    )
+
+
+def start_mirror_engine(vk_token, tg_token, args):
     mirror_process = Process(
         target=mirror_engine.main,
+        args=(vk_token, tg_token, args.log, args.echo_sql),
         daemon=True
     )
-    if args.load:
-        load_dotenv(args.load)
+    mirror_process.start()
 
-    if not args.no_db:
+
+def init_db(echo_sql=False, create_scheme=True):
+    try:
         models.init(
             os.getenv('DB_USER'), os.getenv('DB_HOST'),
             os.getenv('DB_DB'), os.getenv('DB_PASSWORD'),
             os.getenv('DB_PORT', '6644'),
-            echo=bool(args.echo_sql)
+            echo=echo_sql
         )
+    except Exception:
+        log.error("Failed to connect to db")
+        raise
+
+
+def getenv_or_raise(name: str):
+    env = os.getenv(name)
+    if env is None:
+        raise ValueError(
+            "Missing \"{}\" environment variable".format(name)
+        )
+    return env
+
+
+def main():
+    args = setup_args()
+    setup_logging("bot_log.txt", args.log)
+
+    if args.load:
+        load_dotenv(args.load)
+
+    vk_token = getenv_or_raise('VK_TOKEN')
+    tg_token = getenv_or_raise('TG_TOKEN')
+
+    if not args.no_db:
+        init_db(bool(args.echo_sql))
+        log.info("Connected to database")
+
     if args.mirror:
-        mirror_process.start()
+        start_mirror_engine(vk_token, tg_token, args)
+        log.info("Started mirror engine")
 
-    vk_token = os.getenv('VK_TOKEN')
-    tg_token = os.getenv('TG_TOKEN')
-    if not vk_token:
-        print('Missing vk token in env')
-        exit(0)
-    if not tg_token:
-        print('Missing tg token in env')
-        exit(0)
-    print(f"VK token: {vk_token}\nTG token: {tg_token}")
-
-    offset = None
-
-    while True:
-        updates = tg.get_tg_updates(tg_token, offset)
-        if updates:
-            offset = updates[-1]['update_id'] + 1
-            process_updates(updates, vk_token, tg_token)
+    tg.poll_tg_updates(
+        lambda update: process_update(update, vk_token, tg_token),
+        tg_token
+    )
 
 
 if __name__ == "__main__":
     try:
         main()
     except KeyboardInterrupt:
+        log.info("Recieved KeyboardInterrupt")
         print("")
         exit(0)

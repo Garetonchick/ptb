@@ -179,7 +179,12 @@ def init(
         password=password,
         port=port
     )
-
     engine = create_engine(url, echo=echo)
+
     if create_scheme:
-        Base.metadata.create_all(engine)
+        while True:
+            try:
+                Base.metadata.create_all(engine)
+                break
+            except:
+                print("Failed to connect to db. Retrying...")

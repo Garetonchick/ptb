@@ -18,26 +18,26 @@ omit `--mirror` option.
 ### Using docker
 If you have Postgres database somewhere, you can fill settings.env accordingly and run:
 ```
-    sudo docker run --env ENV_VARS="$(cat ./settings.env)" -it ptb:0.2 bash -c "./entrypoint.sh --mirror"
+sudo docker run --env ENV_VARS="$(cat ./settings.env)" -it ptb:0.2 bash -c "./entrypoint.sh --mirror"
 ```
 If you want to run bot and db in containers on the same network you can use docker-compose. 
 Before running command below you should specify name of your `.env` settings file inside 
 docker-compose.yaml. It is `test.env` by default.
 ```
-    sudo docker compose up -d
+sudo docker compose up -d
 ```
 
 ### Without container 
 ```
-    python3 -m venv ptb-venv
-    source ptb-venv/bin/activate 
-    pip3 install -r requirements.txt
-    python3 bot.py --load settings.env --mirror
+python3 -m venv ptb-venv
+source ptb-venv/bin/activate 
+pip3 install -r requirements.txt
+python3 bot.py --load settings.env --mirror
 ```
 
 To run db you can use:
 ```
-    docker run --name pdb_db -p 6644:5432 -e POSTGRES_USER=admin -e POSTGRES_PASSWORD=password -e POSTGRES_DB=ptb_db -e PGDATA=/var/lib/postgresql/data/pgdata -v "ptb_db_data:/var/lib/postgresql/data" -d postgres:13.3
+docker run --name pdb_db -p 6644:5432 -e POSTGRES_USER=admin -e POSTGRES_PASSWORD=password -e POSTGRES_DB=ptb_db -e PGDATA=/var/lib/postgresql/data/pgdata -v "ptb_db_data:/var/lib/postgresql/data" -d postgres:13.3
 ```
 
 ## Usage

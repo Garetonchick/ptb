@@ -5,14 +5,13 @@ import bot
 import os
 import sqlalchemy as sql
 import sqlalchemy.orm as orm
+import logging as log
 
 from datetime import datetime
 from time import sleep
 
 
 def transmit_post(tg_token, post, sus, mirror: models.Mirror):
-    print(f"Tg channel id: {mirror.channel.tg_channel_id}")
-    print(f"Post: {post}")
     tg_post = bot.send_post(tg_token, mirror.channel.tg_channel_id, post)
     post = models.Post(
         posted_datetime=datetime.fromtimestamp(post['date']),
@@ -25,37 +24,42 @@ def transmit_post(tg_token, post, sus, mirror: models.Mirror):
     sus.commit()
 
 
+def send_post_batch(vk_token, tg_token, sus, posts, mirror: models.Mirror):
+    err_fmt = "Failed to transmit post [id={}, date={}, text={}...]"
+    for post in posts:
+        post_datetime = None
+        text = post.get("text")
+        if text is not None:
+            text = text[:10]
+
+        try:
+            post_datetime = datetime.fromtimestamp(post.get('date'))
+            transmit_post(tg_token, post, sus, mirror)
+            mirror.start_datetime = post_datetime
+            sus.commit()
+        except Exception:
+            log.error(err_fmt.format(post.get('id'), post_datetime, text))
+
+
 def transmit_posts(vk_token, tg_token, sus, mirror: models.Mirror):
-    ids = vk.fill_post_ids(vk_token, mirror.start_datetime,
-                           mirror.vk_group_id, mirror.vk_group_name)
-    ids_len = len(ids)
-    last_post_datetime = None
+    ids = vk.fill_post_ids(
+        vk_token,
+        mirror.start_datetime,
+        mirror.vk_group_id,
+        mirror.vk_group_name
+    )
+    batch_size = vk.MAX_VK_POSTS_PER_REQUEST
 
-    try:
-        for i in range(0, len(ids), vk.MAX_VK_POSTS_PER_REQUEST):
-            j = min(i + vk.MAX_VK_POSTS_PER_REQUEST, len(ids))
-            posts = vk.get_posts_by_ids(vk_token, ids[i:j])
-            print(f"Loaded posts from {i + 1} to {j}")
-            post_idx = i
-
-            for post in posts:
-                print(f"Transmission {post_idx}/{ids_len}")
-                post_idx += 1
-                if post:
-                    try:
-                        transmit_post(tg_token, post, sus, mirror)
-                    except Exception:
-                        print("Failed to transmit post:", post)
-                        pass
-                    last_post_datetime = datetime.fromtimestamp(post['date'])
-    except:
-        return last_post_datetime
-    return last_post_datetime
+    for i in range(0, len(ids), batch_size):
+        j = min(i + batch_size, len(ids))
+        posts = vk.get_posts_by_ids(vk_token, ids[i:j])
+        send_post_batch(vk_token, tg_token, sus, posts, mirror)
 
 
 def send_comment(vk_token, tg_token, chat_id, comment, reply_to=None):
     print("\n\n\n\n")
-    print(f"Send comment args: chat_id={chat_id}, reply_to={reply_to}, comment={comment}")
+    print(
+        f"Send comment args: chat_id={chat_id}, reply_to={reply_to}, comment={comment}")
     user = vk.get_user(vk_token, comment['from_id'])
     if not user:
         user = {}
@@ -69,7 +73,9 @@ def send_comment(vk_token, tg_token, chat_id, comment, reply_to=None):
 
 
 def transmit_comments_for_post(vk_token, tg_token, sus, post: models.Post):
+    chname = post.mirror.channel.tg_channel_name
     if not post.tg_linked_chat_post_id:
+        log.warn(f"Channel {chname} doesn't have linked chat")
         return
 
     channel = post.mirror.channel
@@ -82,14 +88,19 @@ def transmit_comments_for_post(vk_token, tg_token, sus, post: models.Post):
         count=batch_size,
         sort='desc',
     )
+    log.debug(f"Got comments batch for channel {chname}")
+    log.debug(f"Comments are {comments}")
 
-    post.comments_offset += len(comments)
-    sus.commit()
+    # post.comments_offset += len(comments)
+    # sus.commit()
     for comment in comments:
+        log.debug("Sending comment")
         tgcom = send_comment(vk_token, tg_token, channel.tg_linked_chat_id, comment,
                              reply_to=post.tg_linked_chat_post_id)
         if not tgcom:
+            log.debug("Failed to send comment")
             continue
+        log.debug("Sent comment")
         mcom = models.Comment(
             vk_comment_id=str(str(comment['id'])),
             tg_comment_id=str(str(tgcom['message_id'])),
@@ -212,30 +223,17 @@ def load_mirrors_list(sus):
 def mirror_mirrors(sus, vk_token, tg_token):
     mirrors = load_mirrors_list(sus)
     for mirror in mirrors:
-        new_start_datetime = transmit_posts(vk_token, tg_token, sus, mirror)
-        if new_start_datetime:
-            mirror.start_datetime = new_start_datetime
-            sus.commit()
-
+        transmit_posts(vk_token, tg_token, sus, mirror)
         transmit_comments_for_mirror(vk_token, tg_token, sus, mirror)
         transmit_threads_for_mirror(vk_token, tg_token, sus, mirror)
 
 
-def main():
-    print("Mirror engine started")
-    vk_token = os.getenv('VK_TOKEN')
-    tg_token = os.getenv('TG_TOKEN')
+def main(vk_token, tg_token, loglevel, echo_sql: bool):
+    bot.setup_logging("mirror_engine_log.txt", loglevel)
+    log.info("Mirror engine started")
+    bot.init_db(echo_sql, create_scheme=False)
+    log.info("Connected to database")
 
-    if not vk_token:
-        print('Missing vk token in env')
-        exit(0)
-    if not tg_token:
-        print('Missing tg token in env')
-        exit(0)
-
-    models.init(os.getenv('DB_USER'), os.getenv('DB_HOST'),
-                os.getenv('DB_DB'), os.getenv('DB_PASSWORD'),
-                os.getenv('DB_PORT', '6644'), create_scheme=False)
     while True:
         with orm.Session(models.engine) as sus:
             mirror_mirrors(sus, vk_token, tg_token)
@@ -244,7 +242,7 @@ def main():
 
 if __name__ == "__main__":
     try:
-        main()
+        main(os.getenv('VK_TOKEN'), os.getenv('TG_TOKEN'), "info", False)
     except KeyboardInterrupt:
         print("")
         exit(0)

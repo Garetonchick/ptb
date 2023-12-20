@@ -12,7 +12,10 @@ services:
       - 5432
 
   ptb:
-    image: ptb:0.2 # Change to gareton/ptb after testing
+    image: ptb # Change to gareton/ptb after testing
+    build:
+      context: .
+      dockerfile: Dockerfile
     command: sh -c "python bot.py --mirror"
     environment:
       DB_HOST: ptb_db
